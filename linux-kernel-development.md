@@ -23,7 +23,7 @@
 
 - The task_struct structure is allocated via the slab allocator to provide object reuse and cache coloring.
 
-<p align="center"><img src="https://i.imgur.com/mQZ3v4q.png" width="300px" height="auto"></p>
+<p align="center"><img src="https://i.imgur.com/mQZ3v4q.png" width="450px" height="auto"></p>
 
 - Each task’s `thread_info` structure is allocated at the end of its stack.- The task element of the structure is a pointer to the task’s actual `task_struct`.
 
@@ -41,7 +41,7 @@
     - __TASK_TRACED__: process is being traced by another process, such as a debugger, via ptrace.
     - __TASK_STOPPED__: execution has stopped; the task is not running nor is it eligible to run. This occurs if the task receives the `SIGSTOP`, `SIGTSTP`, `SIGTTIN`, or `SIGTTOU` signal or if it receives any signal while it is being debugged.
 
-<p align="center"><img src="https://i.imgur.com/O4S7S7r.png" width="300px" height="auto"></p>
+<p align="center"><img src="https://i.imgur.com/O4S7S7r.png" width="450px" height="auto"></p>
 
 #### Manipulating the Current Process State
 
@@ -240,9 +240,148 @@ leads to several pathological problems:
     - impractical, because it is not possible on a single processor to literally run multiple processes simultaneously
     - not efficient to run processes for infinitely small durations (the overhead of context switches + the effects on caches).
 - CFS is mindful of the overhead and performance hit in doing so. Instead, CFS will run each process for some amount of time __round-robin__, selecting next the process that has run the least.
-- Rather than assign each process a timeslice, CFS calculates how long a process should run as a function of __the total number of runnable processes__. 
+- rather than assign each process a timeslice, CFS calculates how long a process should run as a function of __the total number of runnable processes__. 
 - instead of using the nice value to calculate a timeslice, CFS uses the __nice__ value to __weight__ the proportion of processor a process is to receive: Higher valued (lower priority) processes receive a fractional weight relative to the default nice value, whereas lower valued (higher priority) processes receive a larger weight.
 - each process then runs for a timeslice __proportional__ to its weight __divided__ by the __total weight__ of all runnable threads.
--  note that CFS isn’t perfectly fair, because it only __approximates perfect multitasking__, but it can place a lower bound on latency of `n` for `n` runnable processes on the unfairness.
+- note that CFS isn’t perfectly fair, because it only __approximates perfect multitasking__, but it can place a lower bound on latency of `n` for `n` runnable processes on the unfairness.
 
 ### The Linux Scheduling Implementation
+
+- lives in `kernel/sched_fair.c`.
+- we discuss four components of CFS:
+    - Time Accounting
+    - Process Selection
+    - The Scheduler Entry Point
+    - Sleeping and Waking Up
+
+#### Time Accounting
+
+- all process schedulers must account for the time that a process runs.
+- most unix systems do so with timeslices.
+    - on each tick of the system clock, the timeslice is decremented by the tick period.
+    - when the timeslice reaches zero, the process is preempted in favor of another runnable process with a nonzero timeslice
+- CFS does not have the notion of a timeslice, it uses the __scheduler entity structure__, `struct sched_entity`, defined in `<linux/sched.h>`, to keep track of process accounting.
+    - this structure is embedded in the process descriptor, struct `task_stuct`, as a member variable named `se`.
+- the __vruntime variable__ stores the virtual runtime of a process, which is the actual runtime (the amount of time spent running) normalized (or weighted) by the number of runnable processes.
+- `update_curr()`, defined in `kernel/sched_fair.c`, manages this accounting.
+
+#### Process Selection
+
+- when CFS is deciding what process to run next, it picks the process with the __smallest vruntime__.
+- CFS uses a _red-black tree_ to manage the list of runnable processes and efficiently find the process with the __smallest vruntime__
+- the function that performs this selection is `__pick_next_entity()`, defined in `kernel/sched_fair.c`.
+
+### The Scheduler Entry Point
+
+- the main entry point into the process schedule is the function `schedule()`, defined in `kernel/sched.c`.
+- it finds the highest priority scheduler class with a runnable process and asks it what to run next.
+- `pick_next_task()`  goes through each scheduler class, starting with the __highest priority__, and selects the highest priority process in the highest priority class.
+
+### Sleeping and Waking Up
+
+- the task marks itself as __sleeping__, puts itself on a __wait queue__, __removes__ itself from the red-black tree of runnable, and calls `schedule()` to select a new process to execute.
+- waking back up is the inverse: the task is set as __runnable__, removed from the __wait queue__, and added back to the red-black tree.
+
+#### Wait Queues
+
+- sleeping is handled via wait queues.
+- wait queue is a simple list of processes waiting for an event to occur.
+- are represented in the kernel by `wake_queue_head_t`.
+- are created statically via `DECLARE_WAITQUEUE()` or dynamically via `init_waitqueue_head()`.
+- the task performs the following steps to add itself to a wait queue:
+```c
+/* ‘q’ is the wait queue we wish to sleep on */
+    DEFINE_WAIT(wait);
+    add_wait_queue(q, &wait);
+    while (!condition) { /* condition is the event that we are waiting for */
+        prepare_to_wait(&q, &wait, TASK_INTERRUPTIBLE);
+        if (signal_pending(current))
+            /* handle signal */
+        schedule();
+    }
+finish_wait(&q, &wait);
+```
+
+#### Waking Up
+
+- waking is handled via `wake_up()`, which wakes up all the tasks waiting on the given wait queue.
+- tt calls `try_to_wake_up()`, which sets the task’s state to TASK_RUNNING, calls `enqueue_task()` to add the task to the red-black tree, and sets __need_resched__ if the awakened task’s priority is higher than the priority of the current task.
+- an important note about sleeping is that there are __spurious__ wake-ups.
+    -  just because a task is awakened does not mean that the event for which the task is waiting has occurred.
+    - sleeping should always be handled in a loop that ensures that the condition for which the task is waiting has indeed occurred.
+- the figure below depicts the relationship between each scheduler state:
+<p align="center"><img src="https://i.imgur.com/oumPxqT.png" width="500px" height="auto"></p>
+
+### Preemption and Context Switching
+
+#### Context Switching
+
+- __context switching__, the switching from one runnable task to another.
+- is handled by the `context_switch()` defined in `kernel/sched.c`.
+- is called by `schedule()` when a new process has been selected to run. 
+- does two basic jobs:
+    - calls `switch_mm()`, which is declared in `<asm/mmu_context.h>`, to switch the virtual memory mapping from the previous process’s to that of the new process.
+    - calls `switch_to()`, declared in `<asm/system.h>`, to switch the processor state from the previous process’s to the current’s.This involves saving and restoring stack information and the processor registers and any other architecture-specific state that must be managed and restored on a per-process basis.
+- the kernel provides the `need_resched` flag to signify whether a reschedule should be performed.
+- this flag is set :
+    - by `scheduler_tick()` when a process should be preempted, and;
+    - by `try_to_wake_up()` when a process that has a higher priority than the currently running process is awakened.
+
+#### User Preemtpion
+
+- __user preemption__ can occur:
+    - when returning to user-space from a system call.
+    - when returning to user-space from an interrupt handler.
+
+#### Kernel Preemption
+
+- unlike most other Unix variants and many other OSs, linux kernerl is a __fully preemptive kernel__.
+- the kernel can preempt a task running in the kernel so long as it __does not hold a lock__.
+- kernel preemption can occur
+    - when an interrupt handler exits, before returning to kernel-space.
+    - when kernel code becomes preemptible again.
+    - if a task in the kernel explicitly calls `schedule()`.
+    - if a task in the kernel blocks (which results in a call to `schedule()`).
+
+### Real-Time Scheduling Policies
+
+- linux provides two __real-time__ scheduling policies, __SCHED_FIFO__ and __SCHED_RR__.
+- the normal, not real-time scheduling policy is __SCHED_NORMAL__.
+- these real time polciies are managed by a special real-time scheduler, defined in `kernel/sched_rt.c`.
+- __SCHED_FIFO__:
+    - implements a simple first-in, first-out scheduling algorithm without timeslices.
+    - a runnable __SCHED_FIFO__ task is always scheduled over any __SCHED_NORMAL__ tasks.
+    - when a SCHED_FIFO task becomes runnable, it continues to run until it blocks or explicitly yields the processor; it has no timeslice and can run indefinitely.
+    - only a higher priority SCHED_FIFO or SCHED_RR task can preempt a SCHED_FIFO task.
+- __CHED_RR__:
+    - is identical to SCHED_FIFO except that each process can run only until it exhausts a predetermined timeslice.
+    - that is, SCHED_RR is SCHED_FIFO with timeslices.
+    - is a real-time, round-robin scheduling algorithm.
+    - when a SCHED_RR task exhausts its timeslice, any other real-time processes at its priority are scheduled round-robin.
+- both real-time scheduling policies implement __static priorities__.
+    - ensures that a real-time process at a given priority __always__ preempts a process at a lower priority.
+- real-time scheduling policies in Linux provide __soft real-time__ behavior.
+    - refers to the notion that the kernel tries to schedule applications within timing deadlines, 
+    - but the kernel does not promise to always achieve these goals. 
+- conversely, __hard real-time__ systems are guaranteed to meet any scheduling requirements within certain limits. 
+    - Linux makes no guarantees on the capability to schedule real-time tasks.
+
+### Scheduler-Related System Calls
+
+scheduler related system calls:
+
+|System Call | Description|
+|------------|------------|
+|`nice()` | Sets a process’s nice value|
+|`sched_setscheduler()` | Sets a process’s scheduling policy|
+|`sched_getscheduler()` | Gets a process’s scheduling policy|
+|`sched_setparam()` | Sets a process’s real-time priority|
+|`sched_getparam()` | Gets a process’s real-time priority|
+|`sched_get_priority_max()` | Gets the maximum real-time priority|
+|`sched_get_priority_min()` | Gets the minimum real-time priority|
+|`sched_rr_get_interval()` | Gets a process’s timeslice value|
+|`sched_setaffinity()` | Sets a process’s processor affinity|
+|`sched_getaffinity()` | Gets a process’s processor affinity|
+|`sched_yield()` | Temporarily yields the processor|
+
+## System Calls
