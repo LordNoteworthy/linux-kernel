@@ -1,4 +1,13 @@
-# Linux Device Drivers, 3th edition.
+# CHAPTER 1 - An Introduction to Device Drivers
+
+## Classes of Devices and Modules 5
+
+- the Linux way of looking at devices distinguishes between three fundamental device types. Each module usually implements one of these types, and thus is classifiable as a __char module__, a __block module__, or a __network module__.
+- __character devices__: (char) device
+    - is one that can be accessed as a __stream of bytes__ (like a file); a char driver is in charge of implementing this behavior. 
+    - such a driver usually implements at least the _open_, _close_, _read_, and _write_ system calls. 
+    - the text console (`/dev/console`) and the serial ports (/`dev/ttyS0` and friends) are examples of char devices, as they are well represented by the stream abstraction. 
+
 
 ## Communicating with Hardware
 
