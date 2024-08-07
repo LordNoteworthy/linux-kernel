@@ -4,9 +4,9 @@
 
 - the Linux way of looking at devices distinguishes between three fundamental device types. Each module usually implements one of these types, and thus is classifiable as a __char module__, a __block module__, or a __network module__.
 - __character devices__: (char) device
-    - is one that can be accessed as a __stream of bytes__ (like a file); a char driver is in charge of implementing this behavior. 
-    - such a driver usually implements at least the _open_, _close_, _read_, and _write_ system calls. 
-    - the text console (`/dev/console`) and the serial ports (/`dev/ttyS0` and friends) are examples of char devices, as they are well represented by the stream abstraction. 
+    - is one that can be accessed as a __stream of bytes__ (like a file); a char driver is in charge of implementing this behavior.
+    - such a driver usually implements at least the _open_, _close_, _read_, and _write_ system calls.
+    - the text console (`/dev/console`) and the serial ports (/`dev/ttyS0` and friends) are examples of char devices, as they are well represented by the stream abstraction.
 
 
 ## Communicating with Hardware
@@ -15,11 +15,11 @@
 
 - every peripheral device is controlled by writing and reading its registers.
 - they are accessed at consecutive addresses, either in the memory address space or in the I/O address space.
-- even if the peripheral bus has a separate address space for I/O ports, not all devices map their registers to I/O ports.      
+- even if the peripheral bus has a separate address space for I/O ports, not all devices map their registers to I/O ports.
     - while use of I/O ports is common for __ISA__ peripheral boards, most __PCI devices__ map registers into a __memory address region__.
     - this I/O memory approach is generally preferred, because
-        - it doesn’t require the use of special purpose processor instructions; 
-        - CPU cores access memory much more efficiently, 
+        - it doesn’t require the use of special purpose processor instructions;
+        - CPU cores access memory much more efficiently,
         - and the compiler has much more freedom in register allocation and addressing-mode selection when accessing memory.
 
 #### I/O Registers and Conventional Memory
